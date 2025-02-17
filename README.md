@@ -1,6 +1,12 @@
+Below is an **updated** README that incorporates your **new feature**—an optional **third parameter** that, when set to **`Y`**, appends the **original `<Data>` lines** (which may contain SQL or other text) at the bottom of each matching DataBlock in the `SearchMatches.txt` file. It builds upon your existing README content.
+
+---
+
 # Argos XML Parsing & DataBlock Filtering
 
 This repository contains a **single-phase** Argos XML parser that identifies **DataBlocks** (with optional `<Data>` content) and **Reports** (child elements), extracts relevant lines for filtering, and only includes results for DataBlocks whose `<Data>` content (minus lines starting with `<`/`&lt;`) actually matches specified search terms (like `"SSN"`).
+
+When an **optional third parameter** is set to `Y`, the parser will also **append** the **original `<Data>` lines** at the bottom of each **matched** DataBlock in `SearchMatches.txt`. This can help you see the actual SQL or text lines inside `<Data>` (even if they start with `<` and were skipped in the filtering logic).
 
 ## Table of Contents
 
@@ -25,8 +31,9 @@ This repository contains a **single-phase** Argos XML parser that identifies **D
 3. **Skips** lines that begin with `<` or `&lt;` (to avoid false matches in XML tags) when searching for user-provided terms (e.g., `"SSN"`, `"SocialSecurity"`).
 4. **Associates** any `<Report Name="..." />` elements found **inside** that DataBlock's `<Children>` scope with the DataBlock.
 5. **Creates** a single file called `SearchMatches.txt` that only includes DataBlocks whose `<Data>` lines actually reference any of the user’s search terms. Under each DataBlock, it lists the **Reports** that belong to it.
+6. **(New)** Allows an **optional third parameter** (`Y`) to append the **original `<Data>` lines** (which may include SQL) in the final output.
 
-This approach avoids the problem of repeating the same reports for multiple DataBlocks, ensures lines inside XML tags don’t cause false positives, and produces a minimal, succinct final text file highlighting only the relevant results.
+This approach avoids the problem of repeating the same reports for multiple DataBlocks, ensures lines inside XML tags don’t cause false positives, and produces a minimal, succinct final text file highlighting only the relevant results. Now, if you enable the SQL-extraction feature, you can also see the full `<Data>` lines for each matched DataBlock.
 
 ---
 
@@ -40,7 +47,8 @@ This approach avoids the problem of repeating the same reports for multiple Data
   2. `<Name>Sub-element</Name>` if the attribute is missing or says `"Main"`.
   3. Fallback to `UnnamedDataBlock_#` if no valid name is found.
 - **Search** any substring. If a line in `<Data>` contains your search term, that DataBlock is included in `SearchMatches.txt`.
-- **Assocates** `<Report>` elements only if they appear within the same `<Children>` scope as the DataBlock.
+- **Associates** `<Report>` elements only if they appear within the same `<Children>` scope as the DataBlock.
+- **(New)** **Optional** third parameter (`Y`) → includes the **original** `<Data>` lines (which may contain SQL or other text) at the bottom of each matched DataBlock in `SearchMatches.txt`.
 
 ---
 
@@ -53,14 +61,13 @@ The parser’s top-level function:
 3. `ParseChildren` scans for `<DataBlock>`, `<Report>`, or nested `<Children>`:
    - If `<DataBlock>`: calls `ParseDataBlock` to gather `<Name>`, `<Data>` content.
    - If `<Report>`: links it to the current `DataBlockNode` (if any).
-4. Each `DataBlockNode` is stored in a list, eventually processed for matching.
-
-When the parser is complete, it runs a **search** on each `DataBlockNode`’s `<Data>` text. Matching lines:
-
-- Are checked only if they **don’t** start with `<`/`&lt;`.
-- Substring checks are done in lowercase to accommodate different letter casing.
-
-Finally, it writes out `SearchMatches.txt`, listing only the matched DataBlocks with their child reports.
+4. Each `DataBlockNode` is stored in a list, eventually processed for matching:
+   - We **skip** lines starting with `<` when searching.
+   - We do **substring** checks in **lowercase** to match search terms like `"SSN"`.
+5. Finally, we write out `SearchMatches.txt` for only the matched DataBlocks, with:
+   - `DataBlock: <name>`
+   - `Reports:` (child `<Report>` names)
+   - If the **third parameter** is `Y`, a `SQL:` section containing the original lines from `<Data>`.
 
 ---
 
@@ -69,12 +76,18 @@ Finally, it writes out `SearchMatches.txt`, listing only the matched DataBlocks 
 1. **Compile** the C# code (for example using `csc ArgosChildrenParser.cs` or a .NET project).
 2. **Run** the resulting executable:
    ```bash
-   ArgosChildrenParser.exe MyArgosExport.xml "SSN, SocialSecurity, AnotherTerm"
+   ArgosChildrenParser.exe MyArgosExport.xml "SSN,SocialSecurity" Y
    ```
-3. This will create:
-   - `SearchMatches.txt` in the current folder with the matched DataBlocks and associated Reports.
+   or omit the third argument if you **don’t** want to see the `<Data>` lines:
+   ```bash
+   ArgosChildrenParser.exe MyArgosExport.xml "SSN,SocialSecurity"
+   ```
 
-**No other** output is produced, though the code prints `[DEBUG]` messages to the console to help follow the parse logic.
+### Arguments
+
+1. **First**: Path to the Argos XML export file.
+2. **Second**: Comma-separated search terms. If omitted or empty, all DataBlocks match.
+3. **Third**: Optional, if set to **`Y`** (case-insensitive), the parser appends **SQL** / `<Data>` lines in `SearchMatches.txt`.
 
 ---
 
@@ -100,19 +113,26 @@ Consider an Argos export snippet like this:
 ```
 
 - The code sees `<DataBlock>` → `Name="Main"` but also sees `<Name>Employee Deductions</Name>`, so it sets the block’s name to `"Employee Deductions"` (overriding `Main`).
-- Reads all lines within `<Data>` into lowercase.  
-  - Lines that **begin** with `<` or `&lt;` (like `<Condition>Ignore me</Condition>`) will be **skipped** for searching.  
+- Reads all lines within `<Data>` into lowercase for searching:
+  - Lines that **begin** with `<` or `&lt;` (like `<Condition>Ignore me</Condition>`) are **skipped** in the search logic.  
   - The line containing `"SSN_Details some text"` is **not** skipped and thus can match `"ssn"` or `"SSN"`.
 - `<Report Name="EmpDedReport" />` is linked to this DataBlock.
 - If `ssn` is part of the search, the line with `"SSN_Details"` triggers a match.  
-- `SearchMatches.txt` will list:
+- **If** the third parameter is `Y`, the final `SearchMatches.txt` includes:
 
 ```
 DataBlock: Employee Deductions
 Reports:
   - EmpDedReport
   - AnotherReport
+
+SQL:
+SELECT ... from EMPLOYEE_TABLE
+SSN_Details some text
+<Condition>Ignore me</Condition>
 ```
+
+Otherwise, without `Y`, you’ll see the same block + reports but **no** `SQL:` section.
 
 ---
 
@@ -122,27 +142,39 @@ Reports:
 - Recursively processes `<Children>...</Children>` blocks.
 - Within each `<Children>` block, it can see `<DataBlock>`, `<Report>`, or nested `<Children>`.
 - `<DataBlock>` triggers a call to `ParseDataBlock` to read its content.  
-- `<Report>` is attached to the **current** `DataBlockNode` if one is indicated in the parameters (i.e., if we’re inside that block’s `<Children>`).
+- `<Report>` is attached to the **current** `DataBlockNode` if we’re inside that block’s `<Children>`.
 
 ### `ParseDataBlock`
 - Reads potential `Name="..."` from the `<DataBlock ...>` line.
 - Checks for `<Name>...</Name>` sub-element to override if `Name` says `Main` or is empty.
-- Gathers `<Data>` lines (converted to lowercase). The search logic will skip lines starting with `<` or `&lt;`.
+- Captures all **original** `<Data>` lines in a `List<string> OriginalDataLines`, plus a **lowercased** version (`BlockDataLower`) for searching.
 
 ### `ParseReport`
 - Reads lines until `</Report>` is found.
 - If the `<Report ...>` has a `Name="..."` attribute, we store it. Otherwise `(Unnamed Report)`.
 
 ### `MatchesSearch`
-- Splits the stored, **already-lowercase** data by newlines.
+- Splits `BlockDataLower` by lines.
 - For each line:
   - If it starts with `<` or `&lt;`, skip it.
   - Else, check if it contains **any** user-provided term (also lowercased).
 - Returns `true` on the **first** match, `false` if no match is found.
 
+### Third Parameter: `Y`
+- When the user passes `Y` (case-insensitive) as the **third** argument, we print:
+
+  ```
+  SQL:
+  [Line1 from <Data>]
+  [Line2 from <Data>]
+  ...
+  ```
+
+  after the “Reports” block for each matched DataBlock.
+
 ---
 
-## Diagram
+## Mermaid Diagram
 
 ```mermaid
 flowchart TB
@@ -153,12 +185,10 @@ flowchart TB
     C -- yes --> D[DOUBLECIRCLEEND]
     C -- no --> E[skip index++]
 
-    D --> F[Collect DataBlocks in memory]
-    F --> G[DataBlock done?]
+    D --> F[Store DataBlocks in memory]
+    F --> G[More lines?]
     G -- yes --> C
-    G -- no --> D
-
-    C -->|File End| H[(All DataBlocks Collected)]
+    G -- no --> H[(All DataBlocks Collected)]
 
     H --> I[For each DataBlock => run MatchesSearch on &lt;Data&gt;]
     I --> J{Match Found?}
@@ -166,42 +196,45 @@ flowchart TB
     J -- yes --> K[Add DataBlock + Reports to SearchMatches.txt]
     J -- no --> L[Skip]
 
-    K --> J
-    L --> J
+    K --> M{3rd param=Y?}
+    M -- yes --> N[Append original <Data> lines to output]
+    M -- no --> O[No extra lines]
 
-    J -->|Done| M[End with Final File: SearchMatches.txt]
+    N --> P[Done for that block]
+    O --> P[Done for that block]
+
+    P --> I
+    I -->|Done| Q[Finish => SearchMatches.txt]
 ```
 
 **Explanation**:  
-1. **Start** reads `allLines`.  
-2. It **loops** until end of file, checking if line is `<Children>` or not.  
-3. **ParseChildren** finds `<DataBlock>` or `<Report>` or more `<Children>` recursively.  
-4. Storing them in memory (a list of `DataBlockNode`).  
-5. **Search**: each DataBlock’s `<Data>` lines are checked for user terms (skipping `<...>` lines).  
-6. If matched, we write the block name + child reports to `SearchMatches.txt`.  
-7. End.
+1. We **scan** lines for `<Children>`, calling `ParseChildren` recursively.  
+2. **Collect** each `<DataBlock>` into memory with name + `<Data>` lines.  
+3. **Search** each block’s `<Data>` content (skipping `<...>` lines) for any user terms.  
+4. If found, we add to `SearchMatches.txt`.  
+   - If the user specified a third param = `Y`, we also append the original `<Data>` lines.
 
 ---
 
 ## Customization
 
-- **Lines Skipping**: If you also need to skip lines starting with `--`, `/*`, or others, adapt the code in `MatchesSearch`.
-- **Name Logic**: If your `<DataBlock>` doesn’t use `<Name>` but uses `<Title>` or `Name="XYZ"` differently, adjust `ParseDataBlock`.
-- **Case-Insensitive** or partial matches: The code does partial substring matching. If you need exact words (e.g. `\bSSN\b`), use a regex approach.
-- **Output**: We produce `SearchMatches.txt`, but you can easily produce JSON, CSV, or other formats.
+- **Line Skipping**: If you also want to skip comment lines or `--`, `/*`, etc., adapt the logic in `MatchesSearch`.
+- **Case Sensitivity**: Currently we do partial substring matching in lowercase. If you need exact boundary matching (`\bSSN\b`), consider a regex approach.
+- **Output Format**: If you’d prefer to produce JSON, CSV, or something else instead of `SearchMatches.txt`, you can adjust the final writing logic.
+- **SQL Extraction**: This new feature is optional. If a user **omits** the third argument or sets it to something other than `"Y"`, no `<Data>` lines appear in `SearchMatches.txt`.
 
 ---
 
 ## License
 
-You can include a license statement here (e.g. MIT, Apache 2.0) if you’d like. Example:
+_Include a license statement here if desired (e.g., MIT, Apache 2.0):_
 
 ```
 MIT License
 Copyright ...
-Permission is hereby granted...
+Permission is hereby granted ...
 ```
 
 ---
 
-**Enjoy** your Argos data-block parsing and searching! If you have any issues or enhancements, feel free to open a pull request or file an issue in this repository.
+Enjoy your Argos data-block parsing and searching! For any issues or enhancements, feel free to open a pull request or file an issue in this repository.
