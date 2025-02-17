@@ -1,7 +1,3 @@
-Below is an **updated** README that incorporates your **new feature**—an optional **third parameter** that, when set to **`Y`**, appends the **original `<Data>` lines** (which may contain SQL or other text) at the bottom of each matching DataBlock in the `SearchMatches.txt` file. It builds upon your existing README content.
-
----
-
 # Argos XML Parsing & DataBlock Filtering
 
 This repository contains a **single-phase** Argos XML parser that identifies **DataBlocks** (with optional `<Data>` content) and **Reports** (child elements), extracts relevant lines for filtering, and only includes results for DataBlocks whose `<Data>` content (minus lines starting with `<`/`&lt;`) actually matches specified search terms (like `"SSN"`).
