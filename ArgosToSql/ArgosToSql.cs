@@ -19,15 +19,16 @@ using System.Collections.Generic;
 // The program is not designed to work with XML files that contain other types of nested elements.  
 // The program is not designed to work with XML files that contain elements with attributes other than Name.
 
-namespace ArgosToSql
+namespace ArgosT
 {
     class Program
     {
         static void Main(string[] args)
         {
+            // Check mandatory parameters
             if (args.Length < 1)
             {
-                Console.WriteLine("Usage: ArgosChildrenParser.exe <ArgosExport.xml> [searchTermsCsv]");
+                Console.WriteLine("Usage: ArgosChildrenParser.exe <ArgosExport.xml> [searchTermsCsv] [extractSQL=Y|N]");
                 Environment.Exit(1);
             }
 
@@ -38,7 +39,7 @@ namespace ArgosToSql
                 Environment.Exit(1);
             }
 
-            // Parse optional search terms (comma separated)
+            // 2) Parse optional second argument => search terms
             var searchTerms = new List<string>();
             if (args.Length > 1 && !string.IsNullOrWhiteSpace(args[1]))
             {
@@ -51,9 +52,19 @@ namespace ArgosToSql
                 }
             }
 
-            // Read lines
-            var allLines = File.ReadAllLines(inFile);
-            Console.WriteLine($"[DEBUG] Read {allLines.Length} lines from {inFile}");
+            // 3) Parse optional third argument => extractSQL
+            bool extractSQL = false; // default: no
+            if (args.Length > 2 && !string.IsNullOrWhiteSpace(args[2]))
+            {
+                if (args[2].Trim().Equals("Y", StringComparison.OrdinalIgnoreCase))
+                {
+                    extractSQL = true;
+                }
+            }
+
+            Console.WriteLine($"[DEBUG] Reading file: {inFile}");
+            string[] allLines = File.ReadAllLines(inFile);
+            Console.WriteLine($"[DEBUG] Lines read: {allLines.Length}");
 
             // We'll parse from top-level looking for <Children>
             var dataBlocks = new List<DataBlockNode>();
@@ -76,15 +87,14 @@ namespace ArgosToSql
 
             Console.WriteLine($"[DEBUG] Finished parsing. Found {dataBlocks.Count} data blocks total.");
 
-            // Now final search step -> produce SearchMatches.txt
+            // Now final search step => produce SearchMatches.txt
             bool anyMatch = false;
             int unnamedCounter = 0;
-
             using (var sw = new StreamWriter("SearchMatches.txt", false, Encoding.UTF8))
             {
                 foreach (var block in dataBlocks)
                 {
-                    // unify the name. if sub-element also said "Main", we fallback
+                    // unify the final name
                     string finalName = block.BlockName;
                     if (string.IsNullOrEmpty(finalName) || finalName.Equals("main", StringComparison.OrdinalIgnoreCase))
                     {
@@ -92,10 +102,12 @@ namespace ArgosToSql
                         finalName = $"UnnamedDataBlock_{unnamedCounter}";
                     }
 
-                    if (MatchesSearch(block.BlockData, searchTerms))
+                    if (MatchesSearch(block.BlockDataLower, searchTerms))
                     {
                         anyMatch = true;
+                        // Print DataBlock name
                         sw.WriteLine($"DataBlock: {finalName}");
+                        // Print Reports
                         sw.WriteLine("Reports:");
                         if (block.Reports.Count == 0)
                         {
@@ -108,6 +120,18 @@ namespace ArgosToSql
                                 sw.WriteLine($"  - {repName}");
                             }
                         }
+
+                        // If user said extractSQL == Y, then print the "SQL" lines
+                        // i.e., the original lines from <Data> block
+                        if (extractSQL && block.OriginalDataLines.Count > 0)
+                        {
+                            sw.WriteLine();
+                            sw.WriteLine("SQL:");
+                            foreach (var originalLine in block.OriginalDataLines)
+                            {
+                                sw.WriteLine(originalLine);
+                            }
+                        }
                         sw.WriteLine();
                     }
                 }
@@ -118,21 +142,20 @@ namespace ArgosToSql
                 }
             }
 
-            Console.WriteLine("[DEBUG] Done. See SearchMatches.txt for results.");
+            Console.WriteLine("[DEBUG] Done. See 'SearchMatches.txt' for results.");
         }
 
         /// <summary>
-        /// Parse lines that are inside a <Children>...</Children> block,
-        /// collecting <DataBlock> or <Report> or nested <Children>.
+        /// Recursively parse <Children>, collecting <DataBlock> or <Report> or nested <Children>.
         /// If we find <DataBlock>, we parse it, store as a DataBlockNode.
-        /// Then we look for <Children> inside the block for <Report> elements, etc.
+        /// Then we look for <Children> inside that block for <Report> elements, etc.
         /// </summary>
         private static void ParseChildren(string[] lines, ref int index, List<DataBlockNode> dataBlocks, DataBlockNode currentBlock)
         {
             while (index < lines.Length)
             {
                 var line = lines[index].TrimStart();
-                // if we see </Children>
+                // if </Children>
                 if (Regex.IsMatch(line, @"^(<|&lt;)\/Children(>|&gt;)", RegexOptions.IgnoreCase))
                 {
                     Console.WriteLine($"[DEBUG] Found </Children> at line {index}, returning from ParseChildren");
@@ -147,7 +170,7 @@ namespace ArgosToSql
                     var block = ParseDataBlock(lines, ref index);
                     dataBlocks.Add(block);
 
-                    // a data block can have <Children> inside it too, so parse that
+                    // a data block can have <Children> inside it too, so parse them
                     while (index < lines.Length)
                     {
                         var ln2 = lines[index].TrimStart();
@@ -159,7 +182,7 @@ namespace ArgosToSql
                         }
                         else if (Regex.IsMatch(ln2, @"^(<|&lt;)Children(\s|>|&gt;)", RegexOptions.IgnoreCase))
                         {
-                            Console.WriteLine($"[DEBUG] Found <Children> inside DataBlock, parse children for block '{block.BlockName}'");
+                            Console.WriteLine($"[DEBUG] Found <Children> inside DataBlock '{block.BlockName}', parse children");
                             index++;
                             ParseChildren(lines, ref index, dataBlocks, block);
                         }
@@ -183,7 +206,7 @@ namespace ArgosToSql
                 // nested <Children>
                 else if (Regex.IsMatch(line, @"^(<|&lt;)Children(\s|>|&gt;)", RegexOptions.IgnoreCase))
                 {
-                    Console.WriteLine($"[DEBUG] Found nested <Children> at line {index}, parse children with same block");
+                    Console.WriteLine($"[DEBUG] Found nested <Children> at line {index}, parse children with same block context");
                     index++;
                     ParseChildren(lines, ref index, dataBlocks, currentBlock);
                 }
@@ -195,22 +218,20 @@ namespace ArgosToSql
         }
 
         /// <summary>
-        /// Parse <DataBlock> content. We expect possibly:
-        ///   - <DataBlock Name="..." ...> or no attribute
-        ///   - <Name>some block</Name> sub-element
-        ///   - <Data> lines of code </Data>
-        /// We'll gather:
-        ///   blockName from attribute or <Name> sub-element
-        ///   blockData from <Data> lines (lowercased)
-        /// Then we'll break once we see <Children> or <Report> or </DataBlock> in the parent loop
+        /// Parse <DataBlock> content, reading possible <Name>some block</Name> or DataBlock Name="..." attribute,
+        /// plus <Data> lines in original form. We also store them in a lower-cased version for searching.
+        /// We'll break once we see <Children> or <Report> or </DataBlock> in the parent loop.
         /// </summary>
         private static DataBlockNode ParseDataBlock(string[] lines, ref int index)
         {
             var block = new DataBlockNode();
             bool insideData = false;
-            StringBuilder sbData = new StringBuilder();
+            StringBuilder sbDataLower = new StringBuilder();
 
-            // We already advanced index past the <DataBlock line, so let's check that line:
+            // We want to store original lines from <Data> as well.
+            var originalDataLines = new List<string>();
+
+            // We have advanced index past the <DataBlock line. let's check it:
             var openLineIndex = index - 1;
             var openLine = lines[openLineIndex];
             // check if we have an attribute Name="..."
@@ -223,23 +244,25 @@ namespace ArgosToSql
 
             while (index < lines.Length)
             {
-                var line = lines[index].TrimStart();
+                var line = lines[index];
+                var trimmed = line.TrimStart();
 
                 // <Name>some block</Name> sub-element
-                var mName = Regex.Match(line, @"^(<|&lt;)Name(>|&gt;)([^<]+)(<|&lt;)\/Name(>|&gt;)", RegexOptions.IgnoreCase);
+                var mName = Regex.Match(trimmed, @"^(<|&lt;)Name(>|&gt;)([^<]+)(<|&lt;)\/Name(>|&gt;)", RegexOptions.IgnoreCase);
                 if (mName.Success && mName.Groups.Count >= 4)
                 {
                     var subName = mName.Groups[3].Value.Trim();
                     Console.WriteLine($"[DEBUG] Found sub-element <Name>: '{subName}' at line {index}");
                     // If the attribute was "Main" or empty, we override with subName
-                    if (string.IsNullOrEmpty(block.BlockName) || block.BlockName.Equals("main", StringComparison.OrdinalIgnoreCase))
+                    if (string.IsNullOrEmpty(block.BlockName)
+                        || block.BlockName.Equals("main", StringComparison.OrdinalIgnoreCase))
                     {
                         block.BlockName = subName;
                     }
                 }
 
                 // <Data>
-                if (Regex.IsMatch(line, @"^(<|&lt;)Data(>|&gt;)", RegexOptions.IgnoreCase))
+                if (Regex.IsMatch(trimmed, @"^(<|&lt;)Data(>|&gt;)", RegexOptions.IgnoreCase))
                 {
                     Console.WriteLine($"[DEBUG] Found <Data> start at line {index}");
                     insideData = true;
@@ -247,7 +270,7 @@ namespace ArgosToSql
                     continue;
                 }
                 // </Data>
-                if (Regex.IsMatch(line, @"^(<|&lt;)\/Data(>|&gt;)", RegexOptions.IgnoreCase))
+                if (Regex.IsMatch(trimmed, @"^(<|&lt;)\/Data(>|&gt;)", RegexOptions.IgnoreCase))
                 {
                     Console.WriteLine($"[DEBUG] Found </Data> at line {index}");
                     insideData = false;
@@ -255,16 +278,20 @@ namespace ArgosToSql
                     continue;
                 }
 
-                // if inside data, store lines in lowercase
+                // if inside data, store lines
                 if (insideData)
                 {
-                    sbData.AppendLine(line.ToLower());
+                    // store the original line
+                    originalDataLines.Add(line);
+                    // also store the lowercase for searching
+                    sbDataLower.AppendLine(line.ToLower());
+
                     index++;
                     continue;
                 }
 
-                // If we see <Children> or <Report> or </DataBlock>, we stop
-                if (Regex.IsMatch(line, @"^(<|&lt;)\/DataBlock(>|&gt;)|^(<|&lt;)Children(\s|>|&gt;)|^(<|&lt;)Report(\s|>|&gt;)", RegexOptions.IgnoreCase))
+                // If we see <Children> or <Report> or </DataBlock>, we break so the parent loop can handle them
+                if (Regex.IsMatch(trimmed, @"^(<|&lt;)\/DataBlock(>|&gt;)|^(<|&lt;)Children(\s|>|&gt;)|^(<|&lt;)Report(\s|>|&gt;)", RegexOptions.IgnoreCase))
                 {
                     break;
                 }
@@ -272,10 +299,9 @@ namespace ArgosToSql
                 index++;
             }
 
-            // if the attribute name is missing or says "Main" but we found no sub <Name>, we'll keep it for now
-            // fallback logic is in final step
-            block.BlockData = sbData.ToString();
-            Console.WriteLine($"[DEBUG] parseDataBlock => blockName='{block.BlockName}', dataLength={block.BlockData.Length}");
+            block.BlockDataLower = sbDataLower.ToString();
+            block.OriginalDataLines = originalDataLines;
+            Console.WriteLine($"[DEBUG] parseDataBlock => blockName='{block.BlockName}', dataLen={block.BlockDataLower.Length}, originalDataLines={originalDataLines.Count}");
             return block;
         }
 
@@ -298,8 +324,8 @@ namespace ArgosToSql
             bool foundClose = false;
             while (index < lines.Length)
             {
-                var line = lines[index].TrimStart();
-                if (Regex.IsMatch(line, @"^(<|&lt;)\/Report(>|&gt;)", RegexOptions.IgnoreCase))
+                var trimmed = lines[index].TrimStart();
+                if (Regex.IsMatch(trimmed, @"^(<|&lt;)\/Report(>|&gt;)", RegexOptions.IgnoreCase))
                 {
                     Console.WriteLine($"[DEBUG] Found </Report> at line {index}");
                     index++;
@@ -313,7 +339,7 @@ namespace ArgosToSql
             }
             if (!foundClose)
             {
-                Console.WriteLine($"[DEBUG] Did not find </Report> before file ended or next block");
+                Console.WriteLine($"[DEBUG] Did not find </Report> before next block or file end");
             }
 
             Console.WriteLine($"[DEBUG] Done parseReport => '{repName}'");
@@ -322,10 +348,10 @@ namespace ArgosToSql
         }
 
         /// <summary>
-        /// Returns true if blockData has any search term, ignoring lines that start with < or &lt;.
-        /// blockData is already lowercased.
+        /// Returns true if blockDataLower has any search term, ignoring lines that start with < or &lt;.
+        /// We do a line-by-line approach.  blockDataLower is already in all-lower for searching.
         /// </summary>
-        private static bool MatchesSearch(string blockData, List<string> searchTerms)
+        private static bool MatchesSearch(string blockDataLower, List<string> searchTerms)
         {
             if (searchTerms.Count == 0)
             {
@@ -334,7 +360,7 @@ namespace ArgosToSql
             }
 
             // split by lines
-            var lines = blockData.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            var lines = blockDataLower.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
 
             // convert user's terms to lowercase
             var lowers = new List<string>();
@@ -371,7 +397,20 @@ namespace ArgosToSql
     internal class DataBlockNode
     {
         public string BlockName { get; set; } = "";
-        public string BlockData { get; set; } = "";  // all-lower text from <Data>
+        /// <summary>
+        /// All-lower lines from <Data>, for searching
+        /// </summary>
+        public string BlockDataLower { get; set; } = "";
+
+        /// <summary>
+        /// Original lines from <Data>, if user wants to extract SQL
+        /// </summary>
+        public List<string> OriginalDataLines { get; set; } = new List<string>();
+
+        /// <summary>
+        /// Report names found inside this DataBlock's <Children>
+        /// </summary>
         public List<string> Reports { get; } = new List<string>();
     }
 }
+
